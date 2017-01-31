@@ -313,16 +313,15 @@ static int do_job() {
     create_table(db, errmsg);
 
     for (;;) {
-      for (int i = 0; i < 100; i++) {
+      for (int i = 0; i < 10; i++) {
         insert_dummy_telemetry_data(db);
+        sleep(1);
       }
 
       proactive_sqlite3_exec(db, "PRAGMA wal_checkpoint;", NULL, NULL);
       stat(db_path, &st);
       if (st.st_size >= opt.max_size)
         break;
-
-      usleep(10);
     }
 
     sqlite3_close(db);

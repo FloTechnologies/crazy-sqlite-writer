@@ -2,6 +2,7 @@
 #define CRAZY_SQLITE_WRITER_USAGE_H
 
 void usage(FILE *f);
+void version();
 void error(const char *err, ...);
 void fatal(int status, const char *err, ...);
 void fatal_no_exit(const char *err, ...);

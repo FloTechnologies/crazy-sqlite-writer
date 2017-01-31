@@ -10,12 +10,14 @@
 #include <stdlib.h>
 #include "crazy_sqlite_writer.h"
 #include "usage.h"
+#include "version.h"
 
 struct opt opt = {
     .prog_name = PROG_NAME,
     .sqlite_filename = SQLITE_FILENAME,
     .max_size = 1 << 30 /* 1 GB */,
     .usage = false,
+    .version = false,
 };
 
 static unsigned long long parse_human_readable_size(const char *sz) {
@@ -42,6 +44,7 @@ static unsigned long long parse_human_readable_size(const char *sz) {
 static bool parse_args(const int argc, const char *argv[]) {
   static struct option long_options[] = {
       { "help",     no_argument,       0, 'h' },
+      { "version",  no_argument,       0, 'v' },
       { "max-size", required_argument, 0, 0   },
       { 0,          0,                 0, 0   }
   };
@@ -50,7 +53,7 @@ static bool parse_args(const int argc, const char *argv[]) {
   for (;;) {
     int option_index = 0;
 
-    c = getopt_long(argc, (char *const *) argv, "h",
+    c = getopt_long(argc, (char *const *) argv, "hv",
         long_options, &option_index);
 
     if (c == -1)
@@ -64,8 +67,13 @@ static bool parse_args(const int argc, const char *argv[]) {
       return true;
     }
 
+    if (c == 'v') {
+      opt.version = true;
+      return true;
+    }
+
     switch (option_index) {
-      case 1:
+      case 2:
         opt.max_size = parse_human_readable_size(optarg);
         break;
       default:
@@ -73,10 +81,10 @@ static bool parse_args(const int argc, const char *argv[]) {
     }
   }
 
-  if (opt.usage)
+  if (opt.usage || opt.version)
     return true;
 
-  if (optind == argc || optind + 1 < argc)
+  if (argc == 1 || optind == argc || optind + 1 < argc)
     return EINVAL;
 
   opt.work_dir = argv[optind];
@@ -338,6 +346,11 @@ int main(const int argc, const char *argv[]) {
 
   if (opt.usage) {
     usage(stdout);
+    return 0;
+  }
+
+  if (opt.version) {
+    version();
     return 0;
   }
 

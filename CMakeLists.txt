@@ -14,3 +14,8 @@ FILE(GLOB_RECURSE LIB_SOURCE_FILES deps/*.c)
 set(HEADER_FILES crazy_sqlite_writer.h usage.h version.h ${LIB_HEADER_FILES})
 set(SOURCE_FILES main.c usage.c ${LIB_SOURCE_FILES})
 add_executable(crazy-sqlite-writer ${SOURCE_FILES} ${HEADER_FILES})
+
+INSTALL(
+  TARGETS crazy-sqlite-writer
+  RUNTIME DESTINATION bin
+)

@@ -11,6 +11,7 @@ struct opt {
   const char prog_name[sizeof PROG_NAME];
   const char sqlite_filename[sizeof SQLITE_FILENAME];
   unsigned long long max_size;
+  unsigned short interval;
   const char *work_dir;
   bool usage;
   bool version;

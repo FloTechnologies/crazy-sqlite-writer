@@ -6,7 +6,8 @@
 #include "version.h"
 
 static const char usage_string[] =
-    "crazy_sqlite_writer [-h|--help] [-v|--version] [--max-size <size>] <work dir>";
+    "crazy_sqlite_writer [-h|--help] [-v|--version] [--max-size <size>]\n"
+    "       [--interval <millisecond>] <work dir>";
 
 void usage(FILE *f) {
   fprintf(f, "usage: %s\n", usage_string);

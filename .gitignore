@@ -45,3 +45,5 @@ Makefile
 *.cbp
 crazy-sqlite-writer
 crazy-sqlite-writer.db
+crazy-sqlite-writer.db-shm
+crazy-sqlite-writer.db-wal

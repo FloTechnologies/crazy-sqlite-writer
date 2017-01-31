@@ -4,12 +4,21 @@
 #include <getopt.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 #include <sqlite3.h>
 #include <path-join/path-join.h>
+#include <stdlib.h>
 #include "crazy_sqlite_writer.h"
 #include "usage.h"
 
-unsigned long long parse_human_readable_size(const char *sz) {
+struct opt opt = {
+    .prog_name = PROG_NAME,
+    .sqlite_filename = SQLITE_FILENAME,
+    .max_size = 1 << 30 /* 1 GB */,
+    .usage = false,
+};
+
+static unsigned long long parse_human_readable_size(const char *sz) {
   unsigned long long ret = 0;
   int n = 0;
 
@@ -30,7 +39,7 @@ unsigned long long parse_human_readable_size(const char *sz) {
   return ret;
 }
 
-bool parse_args(const int argc, const char *argv[]) {
+static bool parse_args(const int argc, const char *argv[]) {
   static struct option long_options[] = {
       { "help",     no_argument,       0, 'h' },
       { "max-size", required_argument, 0, 0   },
@@ -75,7 +84,7 @@ bool parse_args(const int argc, const char *argv[]) {
   return true;
 }
 
-bool validate_dir(const char *dir) {
+static bool validate_dir(const char *dir) {
   bool ret = false;
   struct stat sb;
 
@@ -85,22 +94,238 @@ bool validate_dir(const char *dir) {
   return ret;
 }
 
-int do_job() {
-  int ret = 0;
-  struct sqlite3 *db;
-  char *errmsg = 0;
-  int rc;
+static void proactive_sqlite3_exec(
+    sqlite3 *db,
+    const char *sql,
+    int (*callback) (void *, int, char **, char **),
+    void *callback_arg) {
+  char *errmsg;
 
-  rc = sqlite3_open(path_join(opt.work_dir, opt.sqlite_filename), &db);
+  sqlite3_exec(db, sql, callback, callback_arg, &errmsg);
+  if (errmsg) {
+    fatal(SQLITE_ERROR, errmsg);
+    sqlite3_free(errmsg);
+  }
+}
+
+static void create_table(sqlite3 *db, char *errmsg) {
+  const char *create_table_statment =
+      "CREATE TABLE \"telemetry\" (\"id\" INTEGER NOT NULL PRIMARY KEY, "
+      "\"created_date\" DATETIME NOT NULL, \"device_id\" TEXT, \"flow\" REAL, "
+      "\"flow_rate\" REAL, \"pressure\" REAL, \"temperature\" REAL, "
+      "\"valve_state\" INTEGER, \"occupied\" INTEGER, \"moist\" INTEGER, "
+      "\"raw_data\" TEXT, \"system_mode\" INTEGER, \"zone_mode\" INTEGER, "
+      "\"sent_at\" INTEGER);";
+
+  proactive_sqlite3_exec(db, "PRAGMA journal_mode=WAL;", NULL, NULL);
+  proactive_sqlite3_exec(db, "PRAGMA foreign_keys=OFF;", NULL, NULL);
+  proactive_sqlite3_exec(db, "BEGIN TRANSACTION;", NULL, NULL);
+  proactive_sqlite3_exec(db, create_table_statment, NULL, NULL);
+  proactive_sqlite3_exec(db, "COMMIT;", NULL, NULL);
+}
+
+static void alloc_db_filenames(
+    char **db_path, char **db_shm_path, char **db_wal_path) {
+  *db_path = path_join(opt.work_dir, opt.sqlite_filename);
+  size_t db_path_len = strlen(*db_path);
+  *db_shm_path = malloc(sizeof(char *) * (db_path_len + strlen("-shm") + 1));
+  *db_wal_path = malloc(sizeof(char *) * (db_path_len + strlen("-wal") + 1));
+
+  memcpy(*db_shm_path, *db_path, db_path_len);
+  strcpy(*db_shm_path + db_path_len, "-shm");
+  memcpy(*db_wal_path, *db_path, db_path_len);
+  strcpy(*db_wal_path + db_path_len, "-wal");
+}
+
+static void free_all(size_t *ptr, ...) {
+  va_list ap;
+  va_start(ap, ptr);
+  free(ptr);
+  for (;;) {
+    size_t *p = va_arg(ap, size_t *);
+    if (!p)
+      break;
+    free(p);
+  }
+  va_end(ap);
+}
+
+static void unlink_all(char *filename, ...) {
+  va_list ap;
+  va_start(ap, filename);
+  unlink(filename);
+  for (;;) {
+    char *f = va_arg(ap, char *);
+    if (!f)
+      break;
+    unlink(f);
+  }
+  va_end(ap);
+}
+
+static void insert_dummy_telemetry_data(struct sqlite3 *db) {
+  proactive_sqlite3_exec(db, "BEGIN TRANSACTION;", NULL, NULL);
+  proactive_sqlite3_exec(
+      db,
+      "INSERT INTO telemetry(\"created_date\", \"device_id\", \"flow\", "
+          "\"flow_rate\", \"pressure\", \"temperature\", \"valve_state\", "
+          "\"occupied\", \"moist\", \"raw_data\", \"system_mode\", "
+          "\"zone_mode\", \"sent_at\") VALUES('2017-01-29 00:00:00.799094', "
+          "'8cc7aa027760', 0.0, 0.0, 60.5, 68.0, 1, 0, 0, "
+          "'A7485D020000000001', 5, 1, 1485648000);",
+      NULL,
+      NULL);
+  proactive_sqlite3_exec(db, "COMMIT;", NULL, NULL);
+  proactive_sqlite3_exec(db, "BEGIN TRANSACTION;", NULL, NULL);
+  proactive_sqlite3_exec(
+      db,
+      "INSERT INTO telemetry(\"created_date\", \"device_id\", \"flow\", "
+          "\"flow_rate\", \"pressure\", \"temperature\", \"valve_state\", "
+          "\"occupied\", \"moist\", \"raw_data\", \"system_mode\", "
+          "\"zone_mode\", \"sent_at\") VALUES('2017-01-29 00:00:01.749000', "
+          "'8cc7aa027760', 0.0, 0.0, 60.4, 67.0, 1, 0, 0, "
+          "'A5475C020000000001', 5, 1, 1485648001);",
+      NULL,
+      NULL);
+  proactive_sqlite3_exec(db, "COMMIT;", NULL, NULL);
+  proactive_sqlite3_exec(db, "BEGIN TRANSACTION;", NULL, NULL);
+  proactive_sqlite3_exec(
+      db,
+      "INSERT INTO telemetry(\"created_date\", \"device_id\", \"flow\", "
+          "\"flow_rate\", \"pressure\", \"temperature\", \"valve_state\", "
+          "\"occupied\", \"moist\", \"raw_data\", \"system_mode\", "
+          "\"zone_mode\", \"sent_at\") VALUES('2017-01-29 00:00:02.735505', "
+          "'8cc7aa027760', 0.0, 0.0, 60.5, 68.0, 1, 0, 0, "
+          "'A7485D020000000001', 5, 1, 1485648002);",
+      NULL,
+      NULL);
+  proactive_sqlite3_exec(db, "COMMIT;", NULL, NULL);
+  proactive_sqlite3_exec(db, "BEGIN TRANSACTION;", NULL, NULL);
+  proactive_sqlite3_exec(
+      db,
+      "INSERT INTO telemetry(\"created_date\", \"device_id\", \"flow\", "
+          "\"flow_rate\", \"pressure\", \"temperature\", \"valve_state\", "
+          "\"occupied\", \"moist\", \"raw_data\", \"system_mode\", "
+          "\"zone_mode\", \"sent_at\") VALUES('2017-01-29 00:00:03.737250', "
+          "'8cc7aa027760', 0.0, 0.0, 60.5, 68.0, 1, 0, 0, "
+          "'A7485D020000000001', 5, 1, 1485648003);",
+      NULL,
+      NULL);
+  proactive_sqlite3_exec(db, "COMMIT;", NULL, NULL);
+  proactive_sqlite3_exec(db, "BEGIN TRANSACTION;", NULL, NULL);
+  proactive_sqlite3_exec(
+      db,
+      "INSERT INTO telemetry(\"created_date\", \"device_id\", \"flow\", "
+          "\"flow_rate\", \"pressure\", \"temperature\", \"valve_state\", "
+          "\"occupied\", \"moist\", \"raw_data\", \"system_mode\", "
+          "\"zone_mode\", \"sent_at\") VALUES('2017-01-29 00:00:04.720756', "
+          "'8cc7aa027760', 0.0, 0.0, 60.5, 67.0, 1, 0, 0, "
+          "'A6475D020000000001', 5, 1, 1485648004);",
+      NULL,
+      NULL);
+  proactive_sqlite3_exec(db, "COMMIT;", NULL, NULL);
+  proactive_sqlite3_exec(db, "BEGIN TRANSACTION;", NULL, NULL);
+  proactive_sqlite3_exec(
+      db,
+      "INSERT INTO telemetry(\"created_date\", \"device_id\", \"flow\", "
+          "\"flow_rate\", \"pressure\", \"temperature\", \"valve_state\", "
+          "\"occupied\", \"moist\", \"raw_data\", \"system_mode\", "
+          "\"zone_mode\", \"sent_at\") VALUES('2017-01-29 00:00:00.799094', "
+          "'8cc7aa027760', 0.0, 0.0, 60.5, 68.0, 1, 0, 0, "
+          "'A7485D020000000001', 5, 1, 1485648000);",
+      NULL,
+      NULL);
+  proactive_sqlite3_exec(db, "COMMIT;", NULL, NULL);
+  proactive_sqlite3_exec(db, "BEGIN TRANSACTION;", NULL, NULL);
+  proactive_sqlite3_exec(
+      db,
+      "INSERT INTO telemetry(\"created_date\", \"device_id\", \"flow\", "
+          "\"flow_rate\", \"pressure\", \"temperature\", \"valve_state\", "
+          "\"occupied\", \"moist\", \"raw_data\", \"system_mode\", "
+          "\"zone_mode\", \"sent_at\") VALUES('2017-01-29 00:00:01.749000', "
+          "'8cc7aa027760', 0.0, 0.0, 60.4, 67.0, 1, 0, 0, "
+          "'A5475C020000000001', 5, 1, 1485648001);",
+      NULL,
+      NULL);
+  proactive_sqlite3_exec(db, "COMMIT;", NULL, NULL);
+  proactive_sqlite3_exec(db, "BEGIN TRANSACTION;", NULL, NULL);
+  proactive_sqlite3_exec(
+      db,
+      "INSERT INTO telemetry(\"created_date\", \"device_id\", \"flow\", "
+          "\"flow_rate\", \"pressure\", \"temperature\", \"valve_state\", "
+          "\"occupied\", \"moist\", \"raw_data\", \"system_mode\", "
+          "\"zone_mode\", \"sent_at\") VALUES('2017-01-29 00:00:02.735505', "
+          "'8cc7aa027760', 0.0, 0.0, 60.5, 68.0, 1, 0, 0, "
+          "'A7485D020000000001', 5, 1, 1485648002);",
+      NULL,
+      NULL);
+  proactive_sqlite3_exec(db, "COMMIT;", NULL, NULL);
+  proactive_sqlite3_exec(db, "BEGIN TRANSACTION;", NULL, NULL);
+  proactive_sqlite3_exec(
+      db,
+      "INSERT INTO telemetry(\"created_date\", \"device_id\", \"flow\", "
+          "\"flow_rate\", \"pressure\", \"temperature\", \"valve_state\", "
+          "\"occupied\", \"moist\", \"raw_data\", \"system_mode\", "
+          "\"zone_mode\", \"sent_at\") VALUES('2017-01-29 00:00:03.737250', "
+          "'8cc7aa027760', 0.0, 0.0, 60.5, 68.0, 1, 0, 0, "
+          "'A7485D020000000001', 5, 1, 1485648003);",
+      NULL,
+      NULL);
+  proactive_sqlite3_exec(db, "COMMIT;", NULL, NULL);
+  proactive_sqlite3_exec(db, "BEGIN TRANSACTION;", NULL, NULL);
+  proactive_sqlite3_exec(
+      db,
+      "INSERT INTO telemetry(\"created_date\", \"device_id\", \"flow\", "
+          "\"flow_rate\", \"pressure\", \"temperature\", \"valve_state\", "
+          "\"occupied\", \"moist\", \"raw_data\", \"system_mode\", "
+          "\"zone_mode\", \"sent_at\") VALUES('2017-01-29 00:00:04.720756', "
+          "'8cc7aa027760', 0.0, 0.0, 60.5, 67.0, 1, 0, 0, "
+          "'A6475D020000000001', 5, 1, 1485648004);",
+      NULL,
+      NULL);
+  proactive_sqlite3_exec(db, "COMMIT;", NULL, NULL);
+}
+
+static int do_job() {
+  int ret = 0;
+  struct sqlite3 *db = NULL;
+  char *errmsg = NULL;
+  int rc;
+  char *db_path, *db_shm_path, *db_wal_path;
+  alloc_db_filenames(&db_path, &db_shm_path, &db_wal_path);
+  struct stat st;
 
   for (;;) {
-
-    for (;;) {
+    unlink_all(db_path, db_shm_path, db_wal_path, NULL);
+    if ((rc = sqlite3_open(db_path, &db)) != SQLITE_OK || db == NULL) {
+      fatal(rc, "cannot open SQLite database: %s", db_path);
       break;
     }
-    break;
+
+    create_table(db, errmsg);
+
+    for (;;) {
+      for (int i = 0; i < 100; i++) {
+        insert_dummy_telemetry_data(db);
+      }
+
+      proactive_sqlite3_exec(db, "PRAGMA wal_checkpoint;", NULL, NULL);
+      stat(db_path, &st);
+      if (st.st_size >= opt.max_size)
+        break;
+
+      usleep(10);
+    }
+
+    sqlite3_close(db);
+    sleep(1);
   }
 
+  free_all(
+      (size_t *) db_path,
+      (size_t *) db_shm_path,
+      (size_t *) db_wal_path,
+      NULL);
   return ret;
 }
 

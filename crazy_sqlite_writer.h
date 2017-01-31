@@ -3,17 +3,17 @@
 
 #include <stdbool.h>
 
+#define PROG_NAME "crazy-sqlite-writer"
+#define SQLITE_FILENAME "crazy-sqlite-writer.db"
+
 struct opt {
-  const char prog_name[256];
-  const char sqlite_filename[256];
+  const char prog_name[sizeof PROG_NAME];
+  const char sqlite_filename[sizeof SQLITE_FILENAME];
   unsigned long long max_size;
   const char *work_dir;
   bool usage;
-} opt = {
-    .prog_name = "crazy-sqlite-writer",
-    .sqlite_filename = "crazy-sqlite-writer.db",
-    .max_size = 1 << 30 /* 1 GB */,
-    .usage = false
 };
+
+extern struct opt opt;
 
 #endif //CRAZY_SQLITE_WRITER_CRAZY_SQLITE_WRITER_H
